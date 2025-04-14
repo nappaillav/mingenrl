@@ -11,7 +11,7 @@ import urllib.request
 import gymnasium
 from tqdm import tqdm
 
-DEFAULT_DATASET_DIR = '/home/wtc/sai/genrl/data/ogbench'
+DEFAULT_DATASET_DIR = '/home/chidamv/scratch/data'
 DATASET_URL = 'https://rail.eecs.berkeley.edu/datasets/ogbench'
 
 def load_dataset(dataset_path, directory, ob_dtype=np.float32, action_dtype=np.float32, compact_dataset=False):
@@ -121,13 +121,22 @@ def download_datasets(dataset_names, dataset_dir=DEFAULT_DATASET_DIR):
 if __name__ == "__main__":
     
     # Make an environment and load datasets.
-    dataset_name = 'visual-cube-single-play-v0'
+    dataset_name =  [
+        "visual-cube-double-play-v0",
+        "visual-cube-triple-play-v0",
+        "visual-cube-quadruple-play-v0",
+        "visual-scene-play-v0",
+        "visual-puzzle-3x3-play-v0",
+        "visual-puzzle-4x4-play-v0",
+        "visual-puzzle-4x5-play-v0",
+        "visual-puzzle-4x6-play-v0",
+    ]
     # dataset_name = 'antmaze-large-navigate-v0' 
-    # download_datasets([dataset_name])
+    download_datasets(dataset_name)
 
-    dataset = load_dataset(dataset_path='F:/workspace/sai/data/visual-cube-single-play-v0.npz', 
-                        directory='F:/workspace/sai/genrl/data/visual-cube-single-play/train',
-                        ob_dtype=np.uint8)
+    # dataset = load_dataset(dataset_path='F:/workspace/sai/data/visual-cube-single-play-v0.npz', 
+    #                     directory='F:/workspace/sai/genrl/data/visual-cube-single-play/train',
+    #                     ob_dtype=np.uint8)
     
     # dataset = load_dataset(dataset_path='F:/workspace/sai/data/visual-antmaze-medium-navigate-v0-val.npz', 
     #                     directory='F:/workspace/sai/genrl/data/visual-antmaze-medium-navigate/val',

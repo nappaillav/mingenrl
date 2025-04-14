@@ -27,7 +27,7 @@ reward_ema: True
 acting_reward_fn: env_reward
 clip_rewards: identity
 
-batch_size: 50 
+batch_size: 16 
 batch_length: 50 
 imag_horizon: 15
 eval_state_mean: False

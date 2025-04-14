@@ -13,6 +13,7 @@ import hydra
 import numpy as np
 import torch
 import wandb
+# from dm_env import specs
 
 import tools.utils as utils
 from tools.logger import Logger
@@ -47,7 +48,7 @@ def flatten(d, parent_key='', sep='.'):
             items.append((new_key, v))
     return dict(items)
 
-# Not needed for world model
+
 def add_to(dict_of_lists, single_dict):
     """Append values to the corresponding lists in the dictionary."""
     for k, v in single_dict.items():
@@ -139,52 +140,12 @@ class Workspace:
                                 goal = gym.spaces.Box(low=0, high=255, shape=(c, h, w), dtype=np.uint8),
                                 )
         action_space = self.train_env.action_space
-        data_specs = (
-            observation_space,
-            dict(action=action_space),
-            dict(reward=gym.spaces.Box(low=0, high=1, shape = (1,), dtype=np.float32)),
-            dict(discount=gym.spaces.Box(low=0, high=1, shape = (1,), dtype=np.float32)),
-        )
+        
 
         # # create agent 
         sample_agent = make_dreamer_agent(observation_space, action_space, cfg, cfg.agent)
 
-        if cfg.train_from_data:
-            # Loading replay buffer
-            if cfg.replay_from_wandb_project is not None:
-                api = wandb.Api()
-                project_name = cfg.replay_from_wandb_project
-                params2search = {
-                    "task" : cfg.task if cfg.task_snapshot is None else cfg.task_snapshot,
-                    "seed" : cfg.seed if cfg.seed_snapshot is None else cfg.seed_snapshot,
-                }
-                runs = api.runs(f"PUT_YOUR_USER_HERE/{project_name}")
-                found = False
-                for run in runs:
-                    if np.all([ v == run.config.get(k, None) for k,v in params2search.items()]):
-                        found = True
-                        found_path = Path(run.config['workdir'].replace('/code', ''))
-                        break
-                if not found:
-                    raise Exception("Replay from wandb buffer not found")
-
-                replay_dir = found_path / 'code' / 'buffer'
-            else:
-                replay_dir = Path(cfg.replay_load_dir)
-                # eval_replay_dir = Path(cfg.replay_eval_dir) if cfg.replay_eval_dir else None
-
-            # create data storage
-            self.replay_storage = OGReplayBuffer(data_specs, [],
-                                                    replay_dir,
-                                                    length=cfg.batch_length, **cfg.replay,
-                                                    device=cfg.device, ignore_extra_keys=True, load_recursive=True)
-            print('Loaded ', self.replay_storage._loaded_episodes, 'episodes from ', str(replay_dir))
-
-            # create replay buffer
-            self.replay_loader = make_replay_loader(self.replay_storage,
-                                                    cfg.batch_size,)
-            self._replay_iter = None
-
+        
         if cfg.snapshot_load_dir is not None:
             snapshot_dir = Path(cfg.snapshot_load_dir)
         else:
@@ -192,47 +153,17 @@ class Workspace:
 
         if snapshot_dir is not None:        
             self.load_snapshot_td7(snapshot_dir, resume=True)
-            if self.cfg.reset_world_model:
-                self.agent.wm = sample_agent.wm 
-                # To reset optimization
-                from agent import dreamer_utils as common
-                self.agent.wm.model_opt = common.Optimizer('model', self.agent.wm.parameters(), **self.agent.wm.cfg.model_opt, use_amp=self.agent.wm._use_amp)
-            if self.cfg.reset_connector:
-                self.agent.wm.connector = sample_agent.wm.connector
-                # To reset optimization
-                from agent import dreamer_utils as common
-                self.agent.wm.model_opt = common.Optimizer('model', self.agent.wm.parameters(), **self.agent.wm.cfg.model_opt, use_amp=self.agent.wm._use_amp)
-
+            
             # overwriting cfg
             self.agent.cfg = sample_agent.cfg
             self.agent.wm.cfg = sample_agent.wm.cfg 
             
-            if self.cfg.reset_imag_behavior:
-                self.agent.instantiate_imag_behavior()
+            # if self.cfg.reset_imag_behavior:
+            #     self.agent.instantiate_imag_behavior()
         else:
             self.agent = sample_agent
-        
-        # if hasattr(self.eval_env, 'eval_mode'):
-        #     self.eval_env.eval_mode()
-        
-        eval_specs = (
-            observation_space,
-            dict(action=action_space),
-            dict(reward=gym.spaces.Box(low=0, high=1, shape = (1,), dtype=np.float32)),
-            dict(discount=gym.spaces.Box(low=0, high=1, shape = (1,), dtype=np.float32)),
-        )
-        eval_replay_dir = Path(cfg.replay_eval_dir) if cfg.replay_eval_dir else None
-        self.eval_storage = OGReplayBuffer(eval_specs, {},
-                                                # self.workdir / 'eval_buffer',
-                                                eval_replay_dir,
-                                                length=cfg.batch_length, **cfg.replay,
-                                                device=cfg.device, ignore_extra_keys=True,)
-        ##################### TODO : LOAD VAL DATA FOR evaluation #######################
-        self.eval_replay_loader = make_replay_loader(self.eval_storage,
-                                                    cfg.batch_size,)
-        self._eval_replay_iter = None
-        self.eval_storage._minlen = 1
 
+        
 
         self.timer = utils.Timer()
         self._global_step = 0
@@ -262,92 +193,7 @@ class Workspace:
             self._eval_replay_iter = iter(self.eval_replay_loader)
         return self._eval_replay_iter
     
-
-    def eval_imag_behavior(self,):
-        self.agent._backup_acting_behavior = self.agent._acting_behavior
-        self.agent._acting_behavior = self.agent._imag_behavior
-        self.evaluate()
-        self.agent._acting_behavior = self.agent._backup_acting_behavior
-
-    def train(self):
-        # self.agent._acting_behavior.reset_actor()
-        train_until_step = utils.Until(self.cfg.num_train_frames, 1)
-        eval_every_step = utils.Every(self.cfg.eval_every_frames, 1)
-        should_log_scalars = utils.Every(self.cfg.log_every_frames, 1)
-        should_save_model = utils.Every(self.cfg.save_every_frames, 1)
-        should_log_visual = utils.Every(self.cfg.visual_every_frames, 1)
-        metrics = None
-        eval_metrics = None
-        while train_until_step(self.global_step):
-            # try to evaluate
-            # if self.global_step > 0 and self.global_step % 2000 == 0: #  
-            #     with torch.no_grad(), utils.eval_mode(self.agent):
-            #         batch_data = next(self.eval_replay_iter)
-            #         eval_metrics = self.agent.act(batch_data, None, self.global_step, eval_mode=True, state=None, batch=True)
-            #         self.logger.log_metrics(eval_metrics, self.global_frame, ty='eval')
-
-            if eval_every_step(self.global_step+1):
-                
-                if self.cfg.eval_modality == 'task':
-                    _ = self.evaluate()
-                if self.cfg.eval_modality == 'task_imag':
-                    self.eval_imag_behavior()
-                if self.cfg.eval_modality == 'from_text':
-                    self.logger.log('eval_total_time', self.timer.total_time(), self.global_frame)
-                    self.eval_from_text()
-                if self.cfg.eval_modality == 'data':
-                    with torch.no_grad(), utils.eval_mode(self.agent):
-                        batch_data = next(self.eval_replay_iter)
-                        eval_metrics = self.agent.act(batch_data, None, self.global_step, eval_mode=True, state=None, batch=True)
-                        self.logger.log_metrics(eval_metrics, self.global_frame, ty='eval')
-                
-            if self.cfg.train_from_data:
-                # Sampling data
-                batch_data = next(self.replay_iter)
-                # Set Active OGB
-                if self.cfg.train_world_model:
-                    # print(f"Update : {self.global_step}")
-                    state, outputs, metrics = self.agent.update_wm(batch_data, self.global_step)
-                    # get the goal encoded information
-                    # start, metrics = self.agent.update_acting_behavior(state, outputs, metrics, batch_data)
-                    # metrics = {}
-                    # start, metrics = self.agent.update_acting_behavior(None, None, metrics, batch_data)
-                else:
-                    with torch.no_grad():
-                        outputs, metrics = self.agent.wm.observe_data(batch_data,)
-                if self.cfg.train_connector:
-                    #OGB Do we need to train this for Dreamer v3
-                    _, metrics = self.agent.wm.update_additional_detached_modules(batch_data, outputs, metrics)
-            else:
-                imag_warmup_steps = self.cfg.imag_warmup_steps
-            
-            if self.global_step > 0:
-                # update the metrics
-                if should_log_scalars(self.global_step):
-                    if hasattr(self, 'replay_storage'):
-                        metrics.update(self.replay_storage.stats)
-                    self.logger.log_metrics(metrics, self.global_frame, ty='train')
-                if should_log_visual(self.global_step) and self.cfg.train_from_data and hasattr(self.agent, 'report'):
-                    with torch.no_grad(), utils.eval_mode(self.agent):
-                        videos = self.agent.report(next(self.eval_replay_iter))
-                        self.logger.log_visual(videos, self.global_frame)
-                if should_log_scalars(self.global_step):
-                    elapsed_time, total_time = self.timer.reset()
-                    with self.logger.log_and_dump_ctx(self.global_frame, ty='train') as log:
-                        log('fps', self.cfg.log_every_frames / elapsed_time)
-                        log('step', self.global_step)
-                        if 'model_loss' in metrics: 
-                            log('episode_reward', metrics['model_loss'].item())
-                    
-                # save last model
-                if should_save_model(self.global_step):
-                    self.save_last_model()
-
-            self._global_step += 1
-            # == 1000 is to make sure everything is going well since the start
-            if (self.global_frame == 1000) or (self.global_frame % self.cfg.snapshot_every_frames == 0):
-                self.save_snapshot()
-
+    
     @utils.retry
     def save_snapshot(self):
         snapshot = self.root_dir / f'snapshot_{self.global_frame}.pt'
@@ -449,6 +295,7 @@ class Workspace:
             # print(zsa.shape)
                 report[f'openl_test'] = self.agent.wm.video_pred(data, key, 5)
                 # self.logger.log_visual(report, self.global_frame)
+
     def custom_wandb(self, exp_name, task,seed):
         cfg = self.cfg
         exp_name = '_'.join([
@@ -464,16 +311,14 @@ class Workspace:
         from td7_v2 import Agent
         from tqdm import tqdm 
         
-        seed = 123
+        seed = self.cfg.seed
         exp_name = 'Dreamer_TD7'
         
-        # eval_env.seed(args.seed+100)
         torch.manual_seed(seed)
         np.random.seed(seed)
-        # load model 
-        # load_path = 'F:/workspace/exp_local/2025.04.06/214307_dreamer/100001'
         max_timesteps = 400000
-        env_name = 'visual-cube-single-play-v0'
+        env_name = self.cfg.task
+        tqdm.write(f"Task {self.cfg.task}")
         self.custom_wandb(exp_name, env_name, seed)
         env = ogbench.make_env_and_datasets(dataset_name=env_name, env_only=True)
         env.action_space.seed(seed)
@@ -486,28 +331,29 @@ class Workspace:
                       goal_cond=True, 
                       obs_type='pixel')
         # agent.load(load_path)
-        agent.replay_buffer.load_ogbench('F:/workspace/sai/data/visual-cube-single-play-v0.npz', weight=None)
+        tqdm.write(f"Loaded {self.cfg.data_path}")
+        agent.replay_buffer.load_ogbench(self.cfg.data_path, weight=None)
         evals = []
-        for t in tqdm(range(max_timesteps+1)):
+        for t in range(max_timesteps+1):
             
             evaluate_ogbench(agent, env, evals, eval_tasks=None, t=t)
             
             log_status, metrics = agent.train()
             if log_status:
                 wandb.log(metrics, step=t)
-            if t > 0 and t%20000==0:
-                print(f'{t} Checkpoint Saved')
+            if t > 0 and t%25000==0:
+                tqdm.write(f'{t} Checkpoint Saved')
                 agent.save(self.workdir)
 
 def evaluate_ogbench(agent, env, evals, eval_tasks, t):
-    if t == 0 or t % 20000 != 0:
+    if t == 0 or t % 25000 != 0:
         return 
     renders = []
     eval_metrics, overall_metrics = {}, defaultdict(list)
     video_eps = 5
     task_infos = env.unwrapped.task_infos if hasattr(env.unwrapped, 'task_infos') else env.task_infos
     num_tasks = eval_tasks if eval_tasks is not None else len(task_infos)
-    for task_id in tqdm(range(1, num_tasks + 1)):
+    for task_id in range(1, num_tasks + 1):
         task_name = task_infos[task_id - 1]['task_name']
         eval_info, cur_renders = evaluate_fn(
             agent=agent,
@@ -612,22 +458,8 @@ def evaluate_fn(
 
 
 def start_training(cfg, savedir, workdir):
-    from wm_main import Workspace as W
-    from dataset import load_dataset
-    from tqdm import tqdm 
-    
-    tqdm.write(f'Dataset : {cfg.task}')
+    from agent_trainer import Workspace as W
     root_dir = Path.cwd()
-
-    if not os.path.exists(cfg.replay_load_dir):
-        _ = load_dataset(dataset_path=cfg.train_data, 
-                        directory=cfg.replay_load_dir,
-                        ob_dtype=np.uint8)
-    if not os.path.exists(cfg.replay_eval_dir):
-        _ = load_dataset(dataset_path=cfg.eval_data, 
-                        directory=cfg.replay_eval_dir,
-                        ob_dtype=np.uint8)
-
     cfg.workdir = str(root_dir)
     workspace = W(cfg, savedir, workdir)
     workspace.root_dir = root_dir
@@ -635,14 +467,9 @@ def start_training(cfg, savedir, workdir):
     if snapshot.exists():
         print(f'resuming: {snapshot}')
         workspace.load_snapshot(workspace.root_dir)
-    if cfg.use_wandb and wandb.run is None:
-        # otherwise it was resumed
-        workspace.setup_wandb()
-    
-    
-    workspace.train() 
+    workspace.offline_train()
 
-@hydra.main(config_path='.', config_name='wm')
+@hydra.main(config_path='.', config_name='agent')
 def main(cfg):
     start_training(cfg, None, None)
 

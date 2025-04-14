@@ -194,3 +194,4 @@ builds/
 .mp4
 outputs/*
 ./outputs/*
+exp_local
