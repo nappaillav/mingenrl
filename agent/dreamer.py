@@ -424,6 +424,7 @@ class WorldModel(Module):
     states, _ = self.rssm.observe(
       embed, action, is_first
     )
+    # return states['stoch'].reshape(-1, 1024), states['deter']
     return torch.concat([states['stoch'][:, -1].reshape(-1, 1024),states['deter'][:, -1]], 1) 
 
 class ActorCritic(Module):

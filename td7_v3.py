@@ -50,18 +50,18 @@ class Hyperparameters:
     # Encoder Model
     zs_dim: int = 512
     enc_hdim: int = 512
-    enc_activ: Callable = F.silu
-    encoder_lr: float = 3e-4
+    enc_activ: Callable = F.gelu
+    encoder_lr: float = 3e-5
     
     # Critic Model
     critic_hdim: int = 512
-    critic_activ: Callable = F.silu
-    critic_lr: float = 3e-4
+    critic_activ: Callable = F.gelu
+    critic_lr: float = 3e-5
     
     # Actor Model
     actor_hdim: int = 512
-    actor_activ: Callable = F.relu
-    actor_lr: float = 3e-4
+    actor_activ: Callable = F.gelu
+    actor_lr: float = 3e-5
 
 def weight_init(layer: torch.nn.modules):
     if isinstance(layer, (nn.Linear, nn.Conv2d)):
@@ -143,7 +143,7 @@ class OfflineWMBuffer(OfflineBuffer):
 
 class ValueNetwork(nn.Module):
     def __init__(self, state_dim, action_dim, 
-                 zs_dim=256, hdim=256, activ=F.elu, 
+                 zs_dim=256, hdim=256, activ=F.gelu, 
                  goal=False, obs_type='pixel'):
         super(ValueNetwork, self).__init__()
         self.goal = goal
@@ -167,6 +167,7 @@ class ValueNetwork(nn.Module):
         self.q4 = nn.Linear(feature_layer, hdim)        
         self.q5 = nn.Linear(hdim, hdim)
         self.q6 = nn.Linear(hdim, 1)
+        self.apply(weight_init)
 
 
     def forward(self, zsa, goal):
@@ -174,19 +175,19 @@ class ValueNetwork(nn.Module):
         goal = self.encoder(goal)        
         sa = torch.cat([zsa, goal], 1)
         
-        q1 = AvgL1Norm(self.q1(sa))    
-        q1 = self.activ(self.q2(q1))
-        q1 = self.q3(q1)
+        q1 = ln_activ(self.q1(sa), self.activ)    
+        q1 = ln_activ(self.q2(q1), self.activ)
+        q1 = ln_activ(self.q3(q1), self.active)
 
-        q2 = AvgL1Norm(self.q4(sa))
-        q2 = self.activ(self.q5(q2))
-        q2 = self.q6(q2)
+        q2 = ln_activ(self.q4(sa), self.activ)
+        q2 = ln_activ(self.q5(q2), self.activ)
+        q2 = ln_activ(self.q6(q2), self.activ)
         return torch.cat([q1, q2], 1)
 
 # Critic Q(S, A)
 class WMCritic(nn.Module):
     def __init__(self, state_dim, action_dim, 
-                 zs_dim=256, hdim=256, activ=F.elu, 
+                 zs_dim=256, hdim=256, activ=F.gelu, 
                  goal=False, obs_type='pixel'):
         super(WMCritic, self).__init__()
         self.goal = goal
@@ -213,6 +214,7 @@ class WMCritic(nn.Module):
         self.q4 = nn.Linear(feature_layer, hdim)        
         self.q5 = nn.Linear(hdim, hdim)
         self.q6 = nn.Linear(hdim, 1)
+        self.apply(weight_init)
 
 
     def forward(self, zsa, goal):
@@ -224,18 +226,18 @@ class WMCritic(nn.Module):
         else:
             sa = torch.cat([zsa, goal], 1) if self.goal else zsa
         
-        q1 = AvgL1Norm(self.q1(sa))    
-        q1 = self.activ(self.q2(q1))
-        q1 = self.q3(q1)
+        q1 = ln_activ(self.q1(sa), self.activ)    
+        q1 = ln_activ(self.q2(q1), self.activ)
+        q1 = ln_activ(self.q3(q1), self.activ)
 
-        q2 = AvgL1Norm(self.q4(sa))
-        q2 = self.activ(self.q5(q2))
-        q2 = self.q6(q2)
+        q2 = ln_activ(self.q4(sa), self.activ)
+        q2 = ln_activ(self.q5(q2), self.activ)
+        q2 = ln_activ(self.q6(q2), self.activ)
         return torch.cat([q1, q2], 1)
 # Actor 1. Pi(Z) or 2. Pi(s, z) or 3. pi(s)
 class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, 
-                 zs_dim=256, hdim=256, activ=F.relu, 
+                 zs_dim=256, hdim=256, activ=F.gelu, 
                  goal=False, obs_type='pixel'):
         super(Actor, self).__init__()
         self.goal = goal
@@ -256,15 +258,16 @@ class Actor(nn.Module):
         self.l1 = nn.Linear(feature_dim, hdim)
         self.l2 = nn.Linear(hdim, hdim)
         self.l3 = nn.Linear(hdim, action_dim)
+        self.apply(weight_init)
 
 
     def forward(self, state, goal=None):
         if self.goal:
             goal = AvgL1Norm(self.l0(goal))
-        a = AvgL1Norm(self.l0(state))
+        a = ln_activ(self.l0(state), self.activ)
         a = torch.cat([a, goal], 1) if self.goal else a
-        a = self.activ(self.l1(a))
-        a = self.activ(self.l2(a))
+        a = ln_activ(self.l1(a), self.activ)
+        a = ln_activ(self.l2(a), self.activ)
         return torch.tanh(self.l3(a))
 # Agent 
 
@@ -364,7 +367,7 @@ class Agent(object):
 
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
-        norm = torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 100)
+        norm = torch.nn.utils.clip_grad_norm_(self.critic.parameters(), 10)
         self.critic_optimizer.step()
 
         metrics.update({
@@ -393,7 +396,7 @@ class Agent(object):
 
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
-            norm = torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 100)# 100
+            norm = torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 10)# 100
             self.actor_optimizer.step()
             
             metrics.update({
@@ -420,7 +423,8 @@ class Agent(object):
             self.min_target = self.min
             metrics.update({
                 "train/min_target": self.min_target, 
-                "train/max_target": self.max_target, 
+                "train/max_target": self.max_target,
+                "train/lr":self.hp.critic_lr,
             })
             return True, metrics
         return False, metrics

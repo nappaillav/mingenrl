@@ -308,15 +308,15 @@ class Workspace:
         self.wandb_run_id = wandb.run.id
 
     def offline_train(self):
-        from td7_v2 import Agent
+        from td7_v3 import Agent
         from tqdm import tqdm 
         
         seed = self.cfg.seed
-        exp_name = 'Dreamer_TD7'
+        exp_name = 'Stable_WM_TD7'
         
         torch.manual_seed(seed)
         np.random.seed(seed)
-        max_timesteps = 400000
+        max_timesteps = 390000
         env_name = self.cfg.task
         tqdm.write(f"Task {self.cfg.task}")
         self.custom_wandb(exp_name, env_name, seed)
@@ -341,12 +341,12 @@ class Workspace:
             log_status, metrics = agent.train()
             if log_status:
                 wandb.log(metrics, step=t)
-            if t > 0 and t%25000==0:
+            if t > 0 and t%30000==0:
                 tqdm.write(f'{t} Checkpoint Saved')
                 agent.save(self.workdir)
 
 def evaluate_ogbench(agent, env, evals, eval_tasks, t):
-    if t == 0 or t % 25000 != 0:
+    if t == 0 or t % 30000 != 0:
         return 
     renders = []
     eval_metrics, overall_metrics = {}, defaultdict(list)
